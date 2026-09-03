@@ -223,17 +223,6 @@ jobs:
           echo "Checking LINUX_DIR:"
           make -pn 2>/dev/null | grep '^LINUX_DIR' | head -n 5 || true
 
-      - name: Prepare kernel tree
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          cd "$SDK_DIR"
-
-          echo "Preparing Linux kernel tree..."
-
-          make target/linux/prepare V=s
-
       - name: Verify kernel version
         shell: bash
         run: |
