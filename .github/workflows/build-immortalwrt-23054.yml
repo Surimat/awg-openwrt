@@ -328,11 +328,11 @@ jobs:
           fi
 
           mkdir -p inspect
-
-          ar x "$KMOD_IPK" -C inspect
+          cd inspect
+          ar x "../$KMOD_IPK"
 
           echo "Package contents:"
-          find inspect -type f -maxdepth 3 -print
+          find . -type f -maxdepth 3 -print
 
       - name: Create checksums
         shell: bash
