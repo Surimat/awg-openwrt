@@ -1,0 +1,407 @@
+name: Build AWG 3.1 for ImmortalWrt 23.05.4 RAX3000M
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  IWRT_VERSION: "23.05.4"
+  IWRT_TARGET: "mediatek"
+  IWRT_SUBTARGET: "filogic"
+  IWRT_ARCH: "aarch64_cortex-a53"
+  IWRT_KERNEL: "5.15.167"
+  IWRT_VERMAGIC: "d024313b339f6a16c640db924eb57f35"
+
+  AWG_KERNEL_VERSION: "3.1.20260828"
+  AWG_TOOLS_VERSION: "3.1.20260812"
+
+jobs:
+
+  build:
+    name: AWG 3.1 / ImmortalWrt 23.05.4 / mediatek-filogic
+    runs-on: ubuntu-22.04
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            build-essential \
+            clang \
+            flex \
+            bison \
+            g++ \
+            gawk \
+            gettext \
+            git \
+            libncurses5-dev \
+            libncursesw5-dev \
+            libssl-dev \
+            python3 \
+            python3-distutils \
+            python3-pip \
+            python3-pyelftools \
+            rsync \
+            unzip \
+            wget \
+            zlib1g-dev \
+            file \
+            xz-utils \
+            zstd \
+            tar \
+            jq
+
+      - name: Print build parameters
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "=========================================="
+          echo "IMMORTALWRT / AMNEZIAWG 3.1 BUILD"
+          echo "=========================================="
+          echo "ImmortalWrt : ${IWRT_VERSION}"
+          echo "Target      : ${IWRT_TARGET}"
+          echo "Subtarget   : ${IWRT_SUBTARGET}"
+          echo "Architecture: ${IWRT_ARCH}"
+          echo "Kernel      : ${IWRT_KERNEL}"
+          echo "Vermagic    : ${IWRT_VERMAGIC}"
+          echo "AWG kernel  : ${AWG_KERNEL_VERSION}"
+          echo "AWG tools   : ${AWG_TOOLS_VERSION}"
+          echo "=========================================="
+
+      - name: Download ImmortalWrt SDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          SDK_URL="https://downloads.immortalwrt.org/releases/${IWRT_VERSION}/targets/${IWRT_TARGET}/${IWRT_SUBTARGET}/immortalwrt-sdk-${IWRT_VERSION}-${IWRT_TARGET}-${IWRT_SUBTARGET}_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+
+          echo "SDK:"
+          echo "$SDK_URL"
+
+          wget \
+            --progress=dot:giga \
+            -O immortalwrt-sdk.tar.xz \
+            "$SDK_URL"
+
+          echo "SHA256:"
+          sha256sum immortalwrt-sdk.tar.xz
+
+          EXPECTED_SHA="a92a01af44e50ea98c77a644a2457f1824cfb695ba58cac2ed1c4f0d4ef1f046"
+
+          ACTUAL_SHA="$(sha256sum immortalwrt-sdk.tar.xz | awk '{print $1}')"
+
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "ERROR: SDK SHA256 mismatch!"
+            echo "Expected: $EXPECTED_SHA"
+            echo "Actual  : $ACTUAL_SHA"
+            exit 1
+          fi
+
+          echo "SDK checksum OK."
+
+      - name: Extract SDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          tar -xJf immortalwrt-sdk.tar.xz
+
+          SDK_DIR="$(find . -maxdepth 1 -type d -name 'immortalwrt-sdk-*' | head -n1)"
+
+          if [ -z "$SDK_DIR" ]; then
+            echo "ERROR: SDK directory not found."
+            exit 1
+          fi
+
+          echo "SDK_DIR=$SDK_DIR" >> "$GITHUB_ENV"
+
+      - name: Prepare SDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "$SDK_DIR"
+
+          echo "SDK contents:"
+          ls -la
+
+          echo
+          echo "SDK target:"
+          grep -R \
+            "mediatek" \
+            include \
+            2>/dev/null | head -n 20 || true
+
+      - name: Add AWG packages to SDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          mkdir -p "$SDK_DIR/package"
+
+          rm -rf "$SDK_DIR/package/kmod-amneziawg"
+          rm -rf "$SDK_DIR/package/amneziawg-tools"
+          rm -rf "$SDK_DIR/package/luci-proto-amneziawg"
+
+          cp -a kmod-amneziawg \
+            "$SDK_DIR/package/kmod-amneziawg"
+
+          cp -a amneziawg-tools \
+            "$SDK_DIR/package/amneziawg-tools"
+
+          cp -a luci-proto-amneziawg \
+            "$SDK_DIR/package/luci-proto-amneziawg"
+
+      - name: Verify AWG source versions
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "=== kmod-amneziawg ==="
+          grep -E \
+            'PKG_VERSION|PKG_SOURCE_VERSION' \
+            "$SDK_DIR/package/kmod-amneziawg/Makefile"
+
+          echo
+          echo "=== amneziawg-tools ==="
+          grep -E \
+            'PKG_VERSION|PKG_SOURCE_VERSION' \
+            "$SDK_DIR/package/amneziawg-tools/Makefile"
+
+      - name: Update package feeds
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "$SDK_DIR"
+
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Configure SDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "$SDK_DIR"
+
+          make defconfig
+
+          echo
+          echo "Target configuration:"
+          grep -E \
+            '^CONFIG_TARGET_(mediatek|.*filogic)' \
+            .config || true
+
+      - name: Check kernel build environment
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "$SDK_DIR"
+
+          echo "Checking kernel-related SDK directories..."
+
+          find build_dir \
+            -maxdepth 3 \
+            -type d \
+            -iname '*linux*' \
+            2>/dev/null | head -n 50 || true
+
+          echo
+          echo "Checking LINUX_DIR:"
+          make -pn 2>/dev/null | grep '^LINUX_DIR' | head -n 5 || true
+
+      - name: Prepare kernel tree
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "$SDK_DIR"
+
+          echo "Preparing Linux kernel tree..."
+
+          make target/linux/prepare V=s
+
+      - name: Verify kernel version
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "$SDK_DIR"
+
+          KERNEL_VERSION="$(make -s kernel_version 2>/dev/null || true)"
+
+          echo "SDK kernel version:"
+          echo "$KERNEL_VERSION"
+
+      - name: Build kmod-amneziawg
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "$SDK_DIR"
+
+          make package/kmod-amneziawg/download V=s
+          make package/kmod-amneziawg/prepare V=s
+          make package/kmod-amneziawg/compile V=s
+
+      - name: Build amneziawg-tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "$SDK_DIR"
+
+          make package/amneziawg-tools/download V=s
+          make package/amneziawg-tools/prepare V=s
+          make package/amneziawg-tools/compile V=s
+
+      - name: Build luci-proto-amneziawg
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "$SDK_DIR"
+
+          make package/luci-proto-amneziawg/download V=s
+          make package/luci-proto-amneziawg/prepare V=s
+          make package/luci-proto-amneziawg/compile V=s
+
+      - name: Locate generated packages
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "$SDK_DIR"
+
+          echo "Generated packages:"
+
+          find bin \
+            -type f \
+            \( \
+              -name '*amneziawg*.ipk' \
+              -o -name '*luci-proto-amneziawg*.ipk' \
+            \) \
+            -print \
+            | sort
+
+      - name: Validate package metadata
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "$SDK_DIR"
+
+          mkdir -p "$GITHUB_WORKSPACE/release"
+
+          find bin \
+            -type f \
+            \( \
+              -name 'kmod-amneziawg*.ipk' \
+              -o -name 'amneziawg-tools*.ipk' \
+              -o -name 'luci-proto-amneziawg*.ipk' \
+            \) \
+            -exec cp -v {} "$GITHUB_WORKSPACE/release/" \;
+
+          echo
+          echo "Release directory:"
+          ls -lah "$GITHUB_WORKSPACE/release"
+
+          COUNT="$(find "$GITHUB_WORKSPACE/release" -type f -name '*.ipk' | wc -l)"
+
+          if [ "$COUNT" -lt 3 ]; then
+            echo "ERROR: Expected at least 3 AWG packages."
+            exit 1
+          fi
+
+      - name: Inspect kernel module
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          KMOD_IPK="$(find release -type f -name 'kmod-amneziawg*.ipk' | head -n1)"
+
+          if [ -z "$KMOD_IPK" ]; then
+            echo "ERROR: kmod-amneziawg package not found."
+            exit 1
+          fi
+
+          mkdir -p inspect
+
+          ar x "$KMOD_IPK" -C inspect
+
+          echo "Package contents:"
+          find inspect -type f -maxdepth 3 -print
+
+      - name: Create checksums
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd release
+
+          sha256sum *.ipk > SHA256SUMS
+
+          echo
+          cat SHA256SUMS
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AWG31-ImmortalWrt-23.05.4-RAX3000M
+          path: release/*
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "immortalwrt-23.05.4-awg31-${{ github.run_number }}"
+          name: "AWG 3.1 for ImmortalWrt 23.05.4 / RAX3000M"
+          generate_release_notes: false
+          body: |
+            AmneziaWG 3.1 packages built for:
+
+            Device:
+            CMCC RAX3000M NAND
+
+            ImmortalWrt:
+            23.05.4 r28061-399f9a1db3
+
+            Target:
+            mediatek/filogic
+
+            Architecture:
+            aarch64_cortex-a53
+
+            Kernel:
+            5.15.167
+
+            Kernel vermagic:
+            d024313b339f6a16c640db924eb57f35
+
+            AWG kernel module:
+            3.1.20260828
+
+            AWG tools:
+            3.1.20260812
+
+            IMPORTANT:
+            Packages must only be installed after successful kernel
+            compatibility validation.
+
+            No force-depends installation is intended.
+          files: |
+            release/*.ipk
+            release/SHA256SUMS
