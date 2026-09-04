@@ -315,25 +315,6 @@ jobs:
             exit 1
           fi
 
-      - name: Inspect kernel module
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          KMOD_IPK="$(find release -type f -name 'kmod-amneziawg*.ipk' | head -n1)"
-
-          if [ -z "$KMOD_IPK" ]; then
-            echo "ERROR: kmod-amneziawg package not found."
-            exit 1
-          fi
-
-          mkdir -p inspect
-          cd inspect
-          ar x "../$KMOD_IPK"
-
-          echo "Package contents:"
-          find . -type f -maxdepth 3 -print
-
       - name: Create checksums
         shell: bash
         run: |
